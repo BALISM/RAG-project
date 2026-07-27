@@ -15,7 +15,7 @@ class Settings(BaseSettings):
 
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.6-flash"
-    embedding_model: str = "text-embedding-004"
+    embedding_model: str = "text-embedding-001"
 
     chunk_size_words: int = 300
     chunk_overlap_words: int = 50
