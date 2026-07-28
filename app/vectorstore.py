@@ -57,6 +57,7 @@ def add_chunks(chunks: list[DocumentChunk]) -> None:
                 "doc_name": c.doc_name,
                 "chunk_index": c.chunk_index,
                 "page_number": c.page_number if c.page_number is not None else -1,
+                "content_hash": c.content_hash or "",
             }
             for c in chunks
         ],
