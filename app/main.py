@@ -1,15 +1,15 @@
 """
 Phase 3 — FastAPI routes.
-
-This phase doesn't introduce any new RAG concepts - it's pure plumbing,
-connecting Phase 1 (ingestion.py) and Phase 2 (embeddings.py/vectorstore.py)
-to the outside world via HTTP. The interesting part is already built; this
-phase just makes it reachable.
+Phase 4 adds /chat - retrieval + generation.
+Phase 5 adds duplicate detection, multi-document search, and a document
+detail endpoint.
 
 Endpoints:
-  POST   /documents/upload   Upload a file -> extract -> chunk -> embed -> store
-  GET    /documents          List what's currently in the vector store
-  DELETE /documents/{doc_id} Remove a document and all its chunks
+  POST   /documents/upload      Upload a file -> extract -> chunk -> embed -> store
+  GET    /documents              List what's currently in the vector store
+  GET    /documents/{doc_id}     Full detail for one document, including all its chunks
+  DELETE /documents/{doc_id}     Remove a document and all its chunks
+  POST   /chat                    Ask a question, answered from retrieved chunks
   GET    /health
 """
 from __future__ import annotations
@@ -27,7 +27,7 @@ from app.config import settings
 from app.ingestion import IngestionError, chunk_document, compute_file_hash
 from app.models import UploadResponse
 from app.rag import RagError, answer_question
-from app.vectorstore import add_chunks, delete_document, find_document_by_hash, list_documents
+from app.vectorstore import add_chunks, delete_document, find_document_by_hash, get_document, list_documents
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -100,6 +100,14 @@ async def upload_document(file: UploadFile = File(...)) -> UploadResponse:
 @app.get("/documents")
 def get_documents() -> list[dict]:
     return list_documents()
+
+
+@app.get("/documents/{doc_id}")
+def get_document_detail(doc_id: str) -> dict:
+    doc = get_document(doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"No document found with doc_id={doc_id}")
+    return doc
 
 
 class ChatRequest(BaseModel):
