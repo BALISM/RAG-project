@@ -34,7 +34,15 @@ class IngestionError(Exception):
 # ---------------------------------------------------------------------------
 # Text extraction
 # ---------------------------------------------------------------------------
-
+def compute_file_hash(path: Path) -> str:
+    """SHA256 of the raw file bytes. Used to detect 'this exact file was
+    already uploaded' before we spend time/money re-chunking and
+    re-embedding it."""
+    hasher = hashlib.sha256()
+    with path.open("rb") as f:
+        for block in iter(lambda: f.read(8192), b""):
+            hasher.update(block)
+    return hasher.hexdigest()
 def _extract_pdf_pages(path: Path) -> list[tuple[int | None, str]]:
     reader = pypdf.PdfReader(str(path))
     pages = []
