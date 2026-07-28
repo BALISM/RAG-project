@@ -1,15 +1,15 @@
 """
 Phase 3 — FastAPI routes.
-Phase 4 adds /chat - retrieval + generation.
-Phase 5 adds duplicate detection, multi-document search, and a document
-detail endpoint.
+
+This phase doesn't introduce any new RAG concepts - it's pure plumbing,
+connecting Phase 1 (ingestion.py) and Phase 2 (embeddings.py/vectorstore.py)
+to the outside world via HTTP. The interesting part is already built; this
+phase just makes it reachable.
 
 Endpoints:
-  POST   /documents/upload      Upload a file -> extract -> chunk -> embed -> store
-  GET    /documents              List what's currently in the vector store
-  GET    /documents/{doc_id}     Full detail for one document, including all its chunks
-  DELETE /documents/{doc_id}     Remove a document and all its chunks
-  POST   /chat                    Ask a question, answered from retrieved chunks
+  POST   /documents/upload   Upload a file -> extract -> chunk -> embed -> store
+  GET    /documents          List what's currently in the vector store
+  DELETE /documents/{doc_id} Remove a document and all its chunks
   GET    /health
 """
 from __future__ import annotations
@@ -24,9 +24,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.config import settings
+from app.chat_memory import append_message, get_or_create_session
 from app.ingestion import IngestionError, chunk_document, compute_file_hash
-from app.models import UploadResponse
-from app.rag import RagError, answer_question
+from app.models import ChatMessage, UploadResponse
+from app.rag import RagError, answer_question, rewrite_query
 from app.vectorstore import add_chunks, delete_document, find_document_by_hash, get_document, list_documents
 
 logging.basicConfig(level=logging.INFO)
@@ -112,6 +113,7 @@ def get_document_detail(doc_id: str) -> dict:
 
 class ChatRequest(BaseModel):
     question: str
+    session_id: str | None = None      # omit on the first message; reuse the returned one after that
     doc_id: str | None = None          # optional: restrict search to one document
     doc_ids: list[str] | None = None   # optional: restrict search to a specific set of documents
 
@@ -120,13 +122,35 @@ class ChatRequest(BaseModel):
 def chat(payload: ChatRequest) -> dict:
     if not payload.question.strip():
         raise HTTPException(status_code=400, detail="question cannot be empty")
+
+    session = get_or_create_session(payload.session_id)
+
     try:
-        return answer_question(payload.question, doc_id=payload.doc_id, doc_ids=payload.doc_ids)
+        # Rewrite using history BEFORE retrieval - this is the whole point:
+        # search needs a standalone question, not "what about his education?"
+        standalone_question = rewrite_query(session.messages, payload.question)
+
+        result = answer_question(standalone_question, doc_id=payload.doc_id, doc_ids=payload.doc_ids)
     except RagError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
     except Exception as e:
         logger.exception("Unexpected error answering question")
         raise HTTPException(status_code=500, detail=f"Failed to answer question: {e}") from e
+
+    # Store what the user actually typed (not the rewritten version) so the
+    # history reads naturally if it's ever displayed - the rewrite is an
+    # internal retrieval detail, not something the user said.
+    append_message(session.session_id, ChatMessage(role="user", content=payload.question))
+    append_message(
+        session.session_id,
+        ChatMessage(role="assistant", content=result["answer"], sources=result["sources"]),
+    )
+
+    return {
+        "session_id": session.session_id,
+        "answer": result["answer"],
+        "sources": result["sources"],
+    }
 
 
 @app.delete("/documents/{doc_id}")
