@@ -63,7 +63,7 @@ def add_chunks(chunks: list[DocumentChunk]) -> None:
         ],
     )
 
-    
+
 def find_document_by_hash(content_hash: str) -> str | None:
     """Return the doc_id of an already-stored document with this exact
     content hash, or None if this file hasn't been uploaded before."""
@@ -120,6 +120,39 @@ def list_documents() -> list[dict]:
             seen[doc_id] = {"doc_id": doc_id, "doc_name": meta["doc_name"], "num_chunks": 0}
         seen[doc_id]["num_chunks"] += 1
     return list(seen.values())
+def get_document(doc_id: str) -> dict | None:
+    """Full detail for one document: metadata plus every chunk, in order.
+    Used by GET /documents/{doc_id} - e.g. to preview what actually got
+    extracted/chunked from a file, which is the easiest way to debug 'why
+    did retrieval miss something obvious' (the answer is very often 'the
+    chunk boundary landed badly' or 'extraction mangled this page')."""
+    collection = get_collection()
+    results = collection.get(where={"doc_id": doc_id}, include=["documents", "metadatas"])
+    ids = results.get("ids") or []
+    if not ids:
+        return None
+
+    chunks = []
+    doc_name = ""
+    for chunk_id, text, meta in zip(ids, results["documents"], results["metadatas"]):
+        doc_name = meta["doc_name"]
+        page_number = meta["page_number"]
+        chunks.append(
+            {
+                "chunk_id": chunk_id,
+                "chunk_index": meta["chunk_index"],
+                "page_number": None if page_number == -1 else page_number,
+                "text": text,
+            }
+        )
+    chunks.sort(key=lambda c: c["chunk_index"])
+
+    return {
+        "doc_id": doc_id,
+        "doc_name": doc_name,
+        "num_chunks": len(chunks),
+        "chunks": chunks,
+    }
 
 
 def delete_document(doc_id: str) -> None:
