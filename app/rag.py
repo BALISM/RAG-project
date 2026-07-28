@@ -18,6 +18,8 @@ are what make that trust checkable rather than assumed.
 """
 from __future__ import annotations
 
+from google.genai import types
+
 from app.config import settings
 from app.embeddings import get_client
 from app.models import DocumentChunk
@@ -53,9 +55,14 @@ def _format_context(chunks: list[DocumentChunk]) -> str:
     return "\n\n".join(parts)
 
 
-def answer_question(question: str, doc_id: str | None = None, top_k: int | None = None) -> dict:
+def answer_question(
+    question: str,
+    doc_id: str | None = None,
+    doc_ids: list[str] | None = None,
+    top_k: int | None = None,
+) -> dict:
     """The full Phase 4 pipeline. Returns {"answer": str, "sources": [...]}"""
-    chunks = search(question, top_k=top_k, doc_id=doc_id)
+    chunks = search(question, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids)
 
     if not chunks:
         return {
