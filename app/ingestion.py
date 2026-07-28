@@ -18,6 +18,7 @@ usually worth it.
 """
 from __future__ import annotations
 
+import hashlib
 import uuid
 from pathlib import Path
 
@@ -26,14 +27,12 @@ from docx import Document as DocxDocument
 
 from app.config import settings
 from app.models import DocumentChunk
-import hashlib
+
+
 class IngestionError(Exception):
     pass
 
 
-# ---------------------------------------------------------------------------
-# Text extraction
-# ---------------------------------------------------------------------------
 def compute_file_hash(path: Path) -> str:
     """SHA256 of the raw file bytes. Used to detect 'this exact file was
     already uploaded' before we spend time/money re-chunking and
@@ -43,6 +42,12 @@ def compute_file_hash(path: Path) -> str:
         for block in iter(lambda: f.read(8192), b""):
             hasher.update(block)
     return hasher.hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Text extraction
+# ---------------------------------------------------------------------------
+
 def _extract_pdf_pages(path: Path) -> list[tuple[int | None, str]]:
     reader = pypdf.PdfReader(str(path))
     pages = []
@@ -122,7 +127,7 @@ def chunk_document(
     metadata. Returns (doc_id, list_of_chunks)."""
     doc_id = uuid.uuid4().hex[:12]
     doc_name = doc_name or path.name
-    file_hash = compute_file_hash(path)    
+    file_hash = compute_file_hash(path)
     pages = extract_pages(path)
 
     all_chunks: list[DocumentChunk] = []
@@ -137,6 +142,8 @@ def chunk_document(
                     chunk_index=chunk_index,
                     text=piece,
                     page_number=page_number,
+                    content_hash=file_hash,
+                    stored_filename=path.name,
                 )
             )
             chunk_index += 1
