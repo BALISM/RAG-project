@@ -1,7 +1,6 @@
 """
 Phase 3 — FastAPI routes.
-Phase 4 adds /chat - retrieval + generation, answering questions grounded
-in the uploaded documents.
+Phase 5 adds duplicate-upload detection via content hashing.
 
 Endpoints:
   POST   /documents/upload   Upload a file -> extract -> chunk -> embed -> store
@@ -51,6 +50,8 @@ async def upload_document(file: UploadFile = File(...)) -> UploadResponse:
             detail=f"Unsupported file type '{suffix}'. Allowed: {sorted(ALLOWED_EXTENSIONS)}",
         )
 
+    # Save the upload to disk under a random name so two people uploading
+    # "notes.txt" at the same time can't collide with each other.
     temp_name = f"{uuid.uuid4().hex[:12]}{suffix}"
     dest_path = settings.upload_path / temp_name
     try:
@@ -60,6 +61,18 @@ async def upload_document(file: UploadFile = File(...)) -> UploadResponse:
         file.file.close()
 
     try:
+        existing_doc_id = find_document_by_hash(compute_file_hash(dest_path))
+        if existing_doc_id:
+            dest_path.unlink(missing_ok=True)
+            logger.info("Duplicate upload of %s detected -> reusing doc_id=%s", file.filename, existing_doc_id)
+            existing = next((d for d in list_documents() if d["doc_id"] == existing_doc_id), None)
+            return UploadResponse(
+                doc_id=existing_doc_id,
+                doc_name=existing["doc_name"] if existing else (file.filename or temp_name),
+                num_chunks=existing["num_chunks"] if existing else 0,
+                num_pages=None,
+            )
+
         doc_id, chunks = chunk_document(dest_path, doc_name=file.filename or temp_name)
         add_chunks(chunks)
     except IngestionError as e:
