@@ -1,15 +1,13 @@
 """
 Phase 3 — FastAPI routes.
-
-This phase doesn't introduce any new RAG concepts - it's pure plumbing,
-connecting Phase 1 (ingestion.py) and Phase 2 (embeddings.py/vectorstore.py)
-to the outside world via HTTP. The interesting part is already built; this
-phase just makes it reachable.
+Phase 4 adds /chat - retrieval + generation, answering questions grounded
+in the uploaded documents.
 
 Endpoints:
   POST   /documents/upload   Upload a file -> extract -> chunk -> embed -> store
   GET    /documents          List what's currently in the vector store
   DELETE /documents/{doc_id} Remove a document and all its chunks
+  POST   /chat                Ask a question, answered from retrieved chunks
   GET    /health
 """
 from __future__ import annotations
@@ -21,10 +19,12 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from app.config import settings
 from app.ingestion import IngestionError, chunk_document
 from app.models import UploadResponse
+from app.rag import RagError, answer_question
 from app.vectorstore import add_chunks, delete_document, list_documents
 
 logging.basicConfig(level=logging.INFO)
@@ -51,8 +51,6 @@ async def upload_document(file: UploadFile = File(...)) -> UploadResponse:
             detail=f"Unsupported file type '{suffix}'. Allowed: {sorted(ALLOWED_EXTENSIONS)}",
         )
 
-    # Save the upload to disk under a random name so two people uploading
-    # "notes.txt" at the same time can't collide with each other.
     temp_name = f"{uuid.uuid4().hex[:12]}{suffix}"
     dest_path = settings.upload_path / temp_name
     try:
@@ -86,6 +84,24 @@ async def upload_document(file: UploadFile = File(...)) -> UploadResponse:
 @app.get("/documents")
 def get_documents() -> list[dict]:
     return list_documents()
+
+
+class ChatRequest(BaseModel):
+    question: str
+    doc_id: str | None = None  # optional: restrict search to one document
+
+
+@app.post("/chat")
+def chat(payload: ChatRequest) -> dict:
+    if not payload.question.strip():
+        raise HTTPException(status_code=400, detail="question cannot be empty")
+    try:
+        return answer_question(payload.question, doc_id=payload.doc_id)
+    except RagError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except Exception as e:
+        logger.exception("Unexpected error answering question")
+        raise HTTPException(status_code=500, detail=f"Failed to answer question: {e}") from e
 
 
 @app.delete("/documents/{doc_id}")
