@@ -58,6 +58,7 @@ def add_chunks(chunks: list[DocumentChunk]) -> None:
                 "chunk_index": c.chunk_index,
                 "page_number": c.page_number if c.page_number is not None else -1,
                 "content_hash": c.content_hash or "",
+                "stored_filename": c.stored_filename or "",
             }
             for c in chunks
         ],
@@ -76,13 +77,25 @@ def find_document_by_hash(content_hash: str) -> str | None:
     return results["metadatas"][0]["doc_id"]
 
 
-def search(query: str, top_k: int | None = None, doc_id: str | None = None) -> list[DocumentChunk]:
+def search(
+    query: str,
+    top_k: int | None = None,
+    doc_id: str | None = None,
+    doc_ids: list[str] | None = None,
+) -> list[DocumentChunk]:
     """Embed a question and return the top_k most similar stored chunks,
-    ranked closest-first. Optionally restrict to a single doc_id."""
+    ranked closest-first. Optionally restrict to one document (doc_id) or
+    a specific set of documents (doc_ids) - e.g. "only search these 3
+    files I checked in the UI," not the whole library."""
     k = top_k or settings.top_k_results
     query_vector = embed_query(query)
 
-    where = {"doc_id": doc_id} if doc_id else None
+    where = None
+    if doc_ids:
+        where = {"doc_id": {"$in": doc_ids}}
+    elif doc_id:
+        where = {"doc_id": doc_id}
+
     results = get_collection().query(
         query_embeddings=[query_vector],
         n_results=k,
@@ -108,18 +121,6 @@ def search(query: str, top_k: int | None = None, doc_id: str | None = None) -> l
     return chunks
 
 
-def list_documents() -> list[dict]:
-    """Distinct documents currently stored, with chunk counts - used by the
-    frontend to show what's been uploaded so far."""
-    collection = get_collection()
-    all_items = collection.get(include=["metadatas"])
-    seen: dict[str, dict] = {}
-    for meta in all_items["metadatas"]:
-        doc_id = meta["doc_id"]
-        if doc_id not in seen:
-            seen[doc_id] = {"doc_id": doc_id, "doc_name": meta["doc_name"], "num_chunks": 0}
-        seen[doc_id]["num_chunks"] += 1
-    return list(seen.values())
 def get_document(doc_id: str) -> dict | None:
     """Full detail for one document: metadata plus every chunk, in order.
     Used by GET /documents/{doc_id} - e.g. to preview what actually got
@@ -155,5 +156,32 @@ def get_document(doc_id: str) -> dict | None:
     }
 
 
+def list_documents() -> list[dict]:
+    """Distinct documents currently stored, with chunk counts - used by the
+    frontend to show what's been uploaded so far."""
+    collection = get_collection()
+    all_items = collection.get(include=["metadatas"])
+    seen: dict[str, dict] = {}
+    for meta in all_items["metadatas"]:
+        doc_id = meta["doc_id"]
+        if doc_id not in seen:
+            seen[doc_id] = {"doc_id": doc_id, "doc_name": meta["doc_name"], "num_chunks": 0}
+        seen[doc_id]["num_chunks"] += 1
+    return list(seen.values())
+
+
 def delete_document(doc_id: str) -> None:
-    get_collection().delete(where={"doc_id": doc_id})
+    """Removes both the stored vectors AND the original uploaded file on
+    disk. Before this fix, delete only cleared Chroma - the actual PDF/DOCX
+    file in uploads/ was orphaned forever, silently taking up disk space."""
+    collection = get_collection()
+    existing = collection.get(where={"doc_id": doc_id}, limit=1, include=["metadatas"])
+    metadatas = existing.get("metadatas") or []
+
+    collection.delete(where={"doc_id": doc_id})
+
+    if metadatas:
+        stored_filename = metadatas[0].get("stored_filename")
+        if stored_filename:
+            file_path = settings.upload_path / stored_filename
+            file_path.unlink(missing_ok=True)
