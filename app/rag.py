@@ -22,8 +22,53 @@ from google.genai import types
 
 from app.config import settings
 from app.embeddings import get_client
-from app.models import DocumentChunk
+from app.models import ChatMessage, DocumentChunk
 from app.vectorstore import search
+
+_REWRITE_PROMPT = """\
+Given the conversation so far and a new follow-up question, rewrite the \
+follow-up as a standalone question that makes complete sense on its own, \
+with no missing context (resolve pronouns like "he/it/that" into the \
+actual thing they refer to, using the conversation history).
+
+If the follow-up question is already standalone and doesn't depend on \
+anything earlier in the conversation, return it completely unchanged.
+
+Return ONLY the rewritten question, nothing else - no preamble, no quotes.
+
+Conversation so far:
+{history}
+
+Follow-up question: {question}
+
+Standalone question:"""
+
+
+def rewrite_query(history: list[ChatMessage], question: str) -> str:
+    """Turns a context-dependent follow-up ("what about his education?")
+    into something that means something on its own ("what is Muhammad
+    Balaj's educational background?") BEFORE it gets embedded and
+    searched. Skipped entirely when there's no history yet - the first
+    question in a conversation is standalone by definition, so there's
+    nothing to rewrite and no reason to spend an extra API call on it."""
+    if not history:
+        return question
+
+    # Last 3 turns (6 messages) is plenty of context for resolving a
+    # pronoun or a "what about X" - older history rarely matters for THIS
+    # specific job and just costs more tokens for no benefit.
+    recent = history[-6:]
+    history_text = "\n".join(f"{m.role}: {m.content}" for m in recent)
+    prompt = _REWRITE_PROMPT.format(history=history_text, question=question)
+
+    client = get_client()
+    response = client.models.generate_content(model=settings.gemini_model, contents=prompt)
+    rewritten = getattr(response, "text", None)
+
+    # If rewriting fails for any reason, fall back to the original question
+    # rather than blocking the whole chat - a slightly-worse-quality search
+    # beats a hard error on a non-essential step.
+    return rewritten.strip() if rewritten and rewritten.strip() else question
 
 _RAG_PROMPT = """\
 Answer the question using ONLY the context below, which was retrieved from \
