@@ -18,6 +18,7 @@ class DocumentChunk(BaseModel):
     text: str
     page_number: int | None = None   # only meaningful for PDFs
     content_hash: str | None = None  # SHA256 of the source file, for dedup
+    stored_filename: str | None = None  # actual filename on disk in uploads/, for cleanup on delete
 
 
 class UploadResponse(BaseModel):
