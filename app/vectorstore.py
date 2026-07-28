@@ -63,6 +63,18 @@ def add_chunks(chunks: list[DocumentChunk]) -> None:
         ],
     )
 
+    
+def find_document_by_hash(content_hash: str) -> str | None:
+    """Return the doc_id of an already-stored document with this exact
+    content hash, or None if this file hasn't been uploaded before."""
+    if not content_hash:
+        return None
+    results = get_collection().get(where={"content_hash": content_hash}, limit=1)
+    ids = results.get("ids") or []
+    if not ids:
+        return None
+    return results["metadatas"][0]["doc_id"]
+
 
 def search(query: str, top_k: int | None = None, doc_id: str | None = None) -> list[DocumentChunk]:
     """Embed a question and return the top_k most similar stored chunks,
