@@ -1,12 +1,15 @@
 """
 Phase 3 — FastAPI routes.
-Phase 5 adds duplicate-upload detection via content hashing.
+
+This phase doesn't introduce any new RAG concepts - it's pure plumbing,
+connecting Phase 1 (ingestion.py) and Phase 2 (embeddings.py/vectorstore.py)
+to the outside world via HTTP. The interesting part is already built; this
+phase just makes it reachable.
 
 Endpoints:
   POST   /documents/upload   Upload a file -> extract -> chunk -> embed -> store
   GET    /documents          List what's currently in the vector store
   DELETE /documents/{doc_id} Remove a document and all its chunks
-  POST   /chat                Ask a question, answered from retrieved chunks
   GET    /health
 """
 from __future__ import annotations
@@ -101,7 +104,8 @@ def get_documents() -> list[dict]:
 
 class ChatRequest(BaseModel):
     question: str
-    doc_id: str | None = None  # optional: restrict search to one document
+    doc_id: str | None = None          # optional: restrict search to one document
+    doc_ids: list[str] | None = None   # optional: restrict search to a specific set of documents
 
 
 @app.post("/chat")
@@ -109,7 +113,7 @@ def chat(payload: ChatRequest) -> dict:
     if not payload.question.strip():
         raise HTTPException(status_code=400, detail="question cannot be empty")
     try:
-        return answer_question(payload.question, doc_id=payload.doc_id)
+        return answer_question(payload.question, doc_id=payload.doc_id, doc_ids=payload.doc_ids)
     except RagError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
     except Exception as e:
