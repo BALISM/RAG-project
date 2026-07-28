@@ -17,6 +17,7 @@ class DocumentChunk(BaseModel):
     chunk_index: int
     text: str
     page_number: int | None = None   # only meaningful for PDFs
+    content_hash: str | None = None  # SHA256 of the source file, for dedup
 
 
 class UploadResponse(BaseModel):
