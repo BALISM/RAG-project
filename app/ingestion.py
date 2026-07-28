@@ -26,8 +26,7 @@ from docx import Document as DocxDocument
 
 from app.config import settings
 from app.models import DocumentChunk
-
-
+import hashlib
 class IngestionError(Exception):
     pass
 
