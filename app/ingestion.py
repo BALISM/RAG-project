@@ -122,6 +122,7 @@ def chunk_document(
     metadata. Returns (doc_id, list_of_chunks)."""
     doc_id = uuid.uuid4().hex[:12]
     doc_name = doc_name or path.name
+    file_hash = compute_file_hash(path)    
     pages = extract_pages(path)
 
     all_chunks: list[DocumentChunk] = []
