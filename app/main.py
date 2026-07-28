@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.config import settings
-from app.ingestion import IngestionError, chunk_document
+from app.ingestion import IngestionError, chunk_document, compute_file_hash
 from app.models import UploadResponse
 from app.rag import RagError, answer_question
 from app.vectorstore import add_chunks, delete_document, list_documents
