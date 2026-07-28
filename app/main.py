@@ -25,7 +25,7 @@ from app.config import settings
 from app.ingestion import IngestionError, chunk_document, compute_file_hash
 from app.models import UploadResponse
 from app.rag import RagError, answer_question
-from app.vectorstore import add_chunks, delete_document, list_documents
+from app.vectorstore import add_chunks, delete_document, find_document_by_hash, list_documents
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
