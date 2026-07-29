@@ -14,6 +14,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import uuid
@@ -21,6 +22,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -28,7 +30,7 @@ from app.config import settings
 from app.chat_memory import append_message, get_or_create_session
 from app.ingestion import IngestionError, chunk_document, compute_file_hash
 from app.models import ChatMessage, UploadResponse
-from app.rag import RagError, answer_question, rewrite_query
+from app.rag import RagError, answer_question, answer_question_stream, rewrite_query
 from app.vectorstore import add_chunks, delete_document, find_document_by_hash, get_document, list_documents
 
 logging.basicConfig(level=logging.INFO)
@@ -152,6 +154,48 @@ def chat(payload: ChatRequest) -> dict:
         "answer": result["answer"],
         "sources": result["sources"],
     }
+
+
+@app.post("/chat/stream")
+def chat_stream(payload: ChatRequest) -> StreamingResponse:
+    """Same logic as /chat, but streams the answer as newline-delimited
+    JSON events instead of waiting for the whole thing. One JSON object per
+    line: {"type": "sources"|"token"|"done"|"error", ...}. Newline-delimited
+    JSON rather than real SSE (text/event-stream) because it's simpler to
+    both produce here and consume in the frontend with plain fetch() -
+    no EventSource, no "data: " prefix parsing, just split on newlines."""
+    if not payload.question.strip():
+        raise HTTPException(status_code=400, detail="question cannot be empty")
+
+    session = get_or_create_session(payload.session_id)
+    standalone_question = rewrite_query(session.messages, payload.question)
+
+    def event_stream():
+        full_answer = ""
+        sources: list[dict] = []
+        try:
+            for event in answer_question_stream(
+                standalone_question, doc_id=payload.doc_id, doc_ids=payload.doc_ids
+            ):
+                if event["type"] == "sources":
+                    sources = event["sources"]
+                elif event["type"] == "done":
+                    full_answer = event["text"]
+                yield json.dumps({**event, "session_id": session.session_id}) + "\n"
+        except Exception as e:
+            logger.exception("Streaming chat failed")
+            yield json.dumps({"type": "error", "text": str(e), "session_id": session.session_id}) + "\n"
+            return
+
+        # Save to memory only after the stream finishes successfully - an
+        # interrupted/failed stream shouldn't leave a half-answer in history.
+        append_message(session.session_id, ChatMessage(role="user", content=payload.question))
+        append_message(
+            session.session_id,
+            ChatMessage(role="assistant", content=full_answer, sources=sources),
+        )
+
+    return StreamingResponse(event_stream(), media_type="application/x-ndjson")
 
 
 @app.delete("/documents/{doc_id}")
