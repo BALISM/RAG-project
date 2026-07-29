@@ -163,3 +163,10 @@ def remove_document(doc_id: str) -> dict:
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+# Mounted LAST and at "/" on purpose: Starlette matches routes in the order
+# they were registered, so every API route above still wins over this catch-
+# all. If this were mounted first, it would swallow requests to /chat,
+# /documents, etc. before they ever reached those handlers.
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
