@@ -153,6 +153,8 @@ def chat(payload: ChatRequest) -> dict:
         "session_id": session.session_id,
         "answer": result["answer"],
         "sources": result["sources"],
+        "grounded": result["grounded"],
+        "warning": result["warning"],
     }
 
 
