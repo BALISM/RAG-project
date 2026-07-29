@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     chunk_overlap_words: int = 50
     top_k_results: int = 4
     max_file_size_mb: int = 20
+    max_documents: int = 50
 
     upload_dir: str = "uploads"
     chroma_dir: str = "chroma_db"
