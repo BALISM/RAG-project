@@ -160,6 +160,47 @@
     color: #0b0d11;
     filter: none;
   }
+
+  #chatMessages {
+    max-height: 420px;
+    overflow-y: auto;
+    margin-bottom: 14px;
+  }
+  .msg {
+    padding: 10px 0;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .msg-role {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    margin-bottom: 4px;
+  }
+  .msg.user .msg-role { color: var(--accent); }
+  .msg.assistant .msg-role { color: #6bd68b; }
+  .msg-content { white-space: pre-wrap; }
+  .msg-pending { color: var(--muted); font-style: italic; }
+
+  #chatForm {
+    display: flex;
+    gap: 8px;
+  }
+  #chatInput {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    padding: 12px 14px;
+    font-size: 13px;
+  }
+  #chatInput:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  #chatInput:disabled { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -189,7 +230,13 @@
 
     <section class="panel">
       <h2>Chat</h2>
-      <div class="placeholder" id="chatPlaceholder">Chat interface goes here (upcoming commit).</div>
+      <div id="chatMessages">
+        <div class="placeholder" id="chatPlaceholder">Ask something about your uploaded documents.</div>
+      </div>
+      <form id="chatForm">
+        <input type="text" id="chatInput" placeholder="Ask a question..." autocomplete="off" />
+        <button type="submit" id="chatSendBtn">Ask</button>
+      </form>
     </section>
   </div>
 
@@ -295,6 +342,63 @@ uploadForm.addEventListener('submit', async (e) => {
 });
 
 loadDocuments();
+
+// --- Chat ---
+const chatMessages = document.getElementById('chatMessages');
+const chatForm = document.getElementById('chatForm');
+const chatInput = document.getElementById('chatInput');
+const chatSendBtn = document.getElementById('chatSendBtn');
+
+let sessionId = null;   // set from the server's response after the first turn, reused for every turn after
+let chatHistory = [];   // local render cache: [{role, content}]
+
+function renderChat() {
+  if (chatHistory.length === 0) {
+    chatMessages.innerHTML = '<div class="placeholder">Ask something about your uploaded documents.</div>';
+    return;
+  }
+  chatMessages.innerHTML = chatHistory.map(m => `
+    <div class="msg ${m.role}">
+      <div class="msg-role">${m.role === 'user' ? 'You' : 'Assistant'}</div>
+      <div class="msg-content ${m.pending ? 'msg-pending' : ''}">${escapeHtml(m.content)}</div>
+    </div>
+  `).join('');
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+chatForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const question = chatInput.value.trim();
+  if (!question) return;
+
+  chatInput.value = '';
+  chatInput.disabled = true;
+  chatSendBtn.disabled = true;
+
+  chatHistory.push({ role: 'user', content: question });
+  chatHistory.push({ role: 'assistant', content: 'Thinking...', pending: true });
+  renderChat();
+
+  try {
+    const res = await fetch('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question, session_id: sessionId }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Chat request failed');
+
+    sessionId = data.session_id;
+    chatHistory[chatHistory.length - 1] = { role: 'assistant', content: data.answer };
+  } catch (err) {
+    chatHistory[chatHistory.length - 1] = { role: 'assistant', content: `Error: ${err.message}` };
+  } finally {
+    chatInput.disabled = false;
+    chatSendBtn.disabled = false;
+    chatInput.focus();
+    renderChat();
+  }
+});
 </script>
 </body>
 </html>
