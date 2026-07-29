@@ -92,6 +92,45 @@ class RagError(Exception):
     pass
 
 
+# Phrases that indicate the model correctly declined to answer rather than
+# guessing - these count as "grounded" even with zero citations, because
+# admitting "it's not in the documents" IS the correct grounded behavior,
+# not a failure.
+_REFUSAL_PHRASES = (
+    "don't contain", "doesn't contain", "do not contain", "does not contain",
+    "isn't in the", "is not in the", "isn't contained", "is not contained",
+    "no information", "not mentioned", "not provided", "not available in",
+)
+
+
+def check_grounding(answer: str, num_sources: int) -> dict:
+    """A cheap heuristic safety net, not a real hallucination detector -
+    a genuine one would need a separate LLM call to verify each claim
+    against the source text, which costs money and latency on every single
+    answer. This instead checks for the one specific failure mode that
+    matters most: an answer that neither cites anything NOR admits the
+    information isn't there. That combination almost always means the
+    model quietly fell back to outside knowledge instead of the provided
+    context - exactly what the RAG prompt tells it not to do."""
+    if num_sources == 0:
+        return {"grounded": True, "warning": None}
+
+    answer_lower = answer.lower()
+    has_citation = "[source" in answer_lower
+    is_refusal = any(phrase in answer_lower for phrase in _REFUSAL_PHRASES)
+
+    if has_citation or is_refusal:
+        return {"grounded": True, "warning": None}
+
+    return {
+        "grounded": False,
+        "warning": (
+            "This answer doesn't cite any source and doesn't say the information "
+            "is missing either - it may not be fully grounded in your documents."
+        ),
+    }
+
+
 def _format_context(chunks: list[DocumentChunk]) -> str:
     parts = []
     for i, c in enumerate(chunks, start=1):
@@ -140,7 +179,8 @@ def answer_question(
     if not answer_text:
         raise RagError("Empty response from Gemini")
 
-    return {"answer": answer_text, "sources": _build_sources(chunks)}
+    grounding = check_grounding(answer_text, len(chunks))
+    return {"answer": answer_text, "sources": _build_sources(chunks), **grounding}
 
 
 def answer_question_stream(
