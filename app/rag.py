@@ -164,6 +164,8 @@ def answer_question(
         return {
             "answer": "No documents have been uploaded yet, so there's nothing to search.",
             "sources": [],
+            "grounded": True,
+            "warning": None,
         }
 
     context = _format_context(chunks)
@@ -207,7 +209,7 @@ def answer_question_stream(
         message = "No documents have been uploaded yet, so there's nothing to search."
         yield {"type": "sources", "sources": []}
         yield {"type": "token", "text": message}
-        yield {"type": "done", "text": message}
+        yield {"type": "done", "text": message, "grounded": True, "warning": None}
         return
 
     yield {"type": "sources", "sources": _build_sources(chunks)}
@@ -226,4 +228,5 @@ def answer_question_stream(
     if not full_text:
         raise RagError("Empty streamed response from Gemini")
 
-    yield {"type": "done", "text": full_text}
+    grounding = check_grounding(full_text, len(chunks))
+    yield {"type": "done", "text": full_text, **grounding}
