@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import logging
-import shutil
 import uuid
 from pathlib import Path
 
@@ -61,11 +60,27 @@ async def upload_document(file: UploadFile = File(...)) -> UploadResponse:
     # "notes.txt" at the same time can't collide with each other.
     temp_name = f"{uuid.uuid4().hex[:12]}{suffix}"
     dest_path = settings.upload_path / temp_name
+    max_bytes = settings.max_file_size_mb * 1024 * 1024
+
     try:
+        bytes_written = 0
         with dest_path.open("wb") as f:
-            shutil.copyfileobj(file.file, f)
+            while True:
+                chunk = await file.read(1024 * 1024)  # read 1MB at a time
+                if not chunk:
+                    break
+                bytes_written += len(chunk)
+                if bytes_written > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File exceeds the {settings.max_file_size_mb}MB upload limit",
+                    )
+                f.write(chunk)
+    except HTTPException:
+        dest_path.unlink(missing_ok=True)
+        raise
     finally:
-        file.file.close()
+        await file.close()
 
     try:
         existing_doc_id = find_document_by_hash(compute_file_hash(dest_path))
