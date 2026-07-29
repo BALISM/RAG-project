@@ -15,11 +15,12 @@ class Settings(BaseSettings):
 
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.6-flash"
-    embedding_model: str = "text-embedding-001"
+    embedding_model: str = "gemini-embedding-001"
 
     chunk_size_words: int = 300
     chunk_overlap_words: int = 50
     top_k_results: int = 4
+    max_file_size_mb: int = 20
 
     upload_dir: str = "uploads"
     chroma_dir: str = "chroma_db"
