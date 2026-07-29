@@ -100,6 +100,18 @@ def _format_context(chunks: list[DocumentChunk]) -> str:
     return "\n\n".join(parts)
 
 
+def _build_sources(chunks: list[DocumentChunk]) -> list[dict]:
+    return [
+        {
+            "doc_name": c.doc_name,
+            "page_number": c.page_number,
+            "chunk_id": c.chunk_id,
+            "excerpt": c.text[:200],
+        }
+        for c in chunks
+    ]
+
+
 def answer_question(
     question: str,
     doc_id: str | None = None,
@@ -128,15 +140,50 @@ def answer_question(
     if not answer_text:
         raise RagError("Empty response from Gemini")
 
-    return {
-        "answer": answer_text,
-        "sources": [
-            {
-                "doc_name": c.doc_name,
-                "page_number": c.page_number,
-                "chunk_id": c.chunk_id,
-                "excerpt": c.text[:200],
-            }
-            for c in chunks
-        ],
-    }
+    return {"answer": answer_text, "sources": _build_sources(chunks)}
+
+
+def answer_question_stream(
+    question: str,
+    doc_id: str | None = None,
+    doc_ids: list[str] | None = None,
+    top_k: int | None = None,
+):
+    """Same retrieval + prompt as answer_question, but the generation step
+    streams tokens as they arrive instead of waiting for the whole answer.
+    Yields dicts, always in this order:
+      1. one {"type": "sources", "sources": [...]} - fired BEFORE any text,
+         so a UI can show citations immediately rather than waiting for the
+         full answer to finish (retrieval already happened; there's no
+         reason to withhold that from the caller just because generation
+         hasn't finished yet)
+      2. repeated {"type": "token", "text": "..."} as each piece arrives
+      3. one final {"type": "done", "text": "<full answer>"} - so callers
+         don't have to manually concatenate every token themselves
+    """
+    chunks = search(question, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids)
+
+    if not chunks:
+        message = "No documents have been uploaded yet, so there's nothing to search."
+        yield {"type": "sources", "sources": []}
+        yield {"type": "token", "text": message}
+        yield {"type": "done", "text": message}
+        return
+
+    yield {"type": "sources", "sources": _build_sources(chunks)}
+
+    context = _format_context(chunks)
+    prompt = _RAG_PROMPT.format(context=context, question=question)
+
+    client = get_client()
+    full_text = ""
+    for event in client.models.generate_content_stream(model=settings.gemini_model, contents=prompt):
+        piece = getattr(event, "text", None)
+        if piece:
+            full_text += piece
+            yield {"type": "token", "text": piece}
+
+    if not full_text:
+        raise RagError("Empty streamed response from Gemini")
+
+    yield {"type": "done", "text": full_text}
