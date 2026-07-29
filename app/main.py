@@ -96,10 +96,28 @@ async def upload_document(file: UploadFile = File(...)) -> UploadResponse:
             )
 
         doc_id, chunks = chunk_document(dest_path, doc_name=file.filename or temp_name)
+
+        current_count = len(list_documents())
+        if current_count >= settings.max_documents:
+            dest_path.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Storage limit reached ({settings.max_documents} documents). "
+                    "Delete an existing document before uploading a new one."
+                ),
+            )
+
         add_chunks(chunks)
     except IngestionError as e:
         dest_path.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail=str(e)) from e
+    except HTTPException:
+        # Re-raise as-is (e.g. the 403 storage-limit check above) - without
+        # this, the generic `except Exception` below would catch it too
+        # (HTTPException IS an Exception) and wrap a clean 403 into a
+        # confusing 500. Cleanup already happened at each raise site.
+        raise
     except Exception as e:
         dest_path.unlink(missing_ok=True)
         logger.exception("Unexpected error ingesting %s", file.filename)
