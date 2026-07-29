@@ -136,6 +136,19 @@
   }
   .doc-row:last-child { border-bottom: none; }
   .doc-info { min-width: 0; }
+  .doc-select {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    cursor: pointer;
+  }
+  .doc-checkbox {
+    flex-shrink: 0;
+    accent-color: var(--accent);
+    width: 15px;
+    height: 15px;
+  }
   .doc-name {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -253,6 +266,7 @@
         <input type="text" id="chatInput" placeholder="Ask a question..." autocomplete="off" />
         <button type="submit" id="chatSendBtn">Ask</button>
       </form>
+      <div class="hint" id="chatScopeHint">Searching all uploaded documents. Check specific ones above to narrow it down.</div>
     </section>
   </div>
 
@@ -281,10 +295,13 @@ async function loadDocuments() {
 
   documentsList.innerHTML = docs.map(doc => `
     <div class="doc-row" data-doc-id="${escapeHtml(doc.doc_id)}">
-      <div class="doc-info">
-        <div class="doc-name">${escapeHtml(doc.doc_name)}</div>
-        <div class="doc-meta">${doc.num_chunks} chunk${doc.num_chunks === 1 ? '' : 's'}</div>
-      </div>
+      <label class="doc-info doc-select">
+        <input type="checkbox" class="doc-checkbox" data-doc-id="${escapeHtml(doc.doc_id)}" />
+        <div>
+          <div class="doc-name">${escapeHtml(doc.doc_name)}</div>
+          <div class="doc-meta">${doc.num_chunks} chunk${doc.num_chunks === 1 ? '' : 's'}</div>
+        </div>
+      </label>
       <button class="doc-delete" data-doc-id="${escapeHtml(doc.doc_id)}">Delete</button>
     </div>
   `).join('');
@@ -292,6 +309,20 @@ async function loadDocuments() {
   documentsList.querySelectorAll('.doc-delete').forEach(btn => {
     btn.addEventListener('click', () => deleteDocument(btn.dataset.docId, btn));
   });
+  documentsList.querySelectorAll('.doc-checkbox').forEach(cb => {
+    cb.addEventListener('change', updateScopeHint);
+  });
+}
+
+function getSelectedDocIds() {
+  return Array.from(documentsList.querySelectorAll('.doc-checkbox:checked')).map(cb => cb.dataset.docId);
+}
+
+function updateScopeHint() {
+  const selected = getSelectedDocIds();
+  chatScopeHint.textContent = selected.length === 0
+    ? 'Searching all uploaded documents. Check specific ones above to narrow it down.'
+    : `Searching only ${selected.length} selected document${selected.length === 1 ? '' : 's'}.`;
 }
 
 async function deleteDocument(docId, btnEl) {
@@ -364,6 +395,7 @@ const chatMessages = document.getElementById('chatMessages');
 const chatForm = document.getElementById('chatForm');
 const chatInput = document.getElementById('chatInput');
 const chatSendBtn = document.getElementById('chatSendBtn');
+const chatScopeHint = document.getElementById('chatScopeHint');
 
 let sessionId = null;   // set from the server's response after the first turn, reused for every turn after
 let chatHistory = [];   // local render cache: [{role, content}]
@@ -409,7 +441,11 @@ chatForm.addEventListener('submit', async (e) => {
     const res = await fetch('/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, session_id: sessionId }),
+      body: JSON.stringify({
+        question,
+        session_id: sessionId,
+        doc_ids: getSelectedDocIds().length > 0 ? getSelectedDocIds() : null,
+      }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Chat request failed');
