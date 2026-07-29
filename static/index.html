@@ -125,6 +125,41 @@
     font-size: 13px;
     padding: 12px 0;
   }
+
+  .doc-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .doc-row:last-child { border-bottom: none; }
+  .doc-info { min-width: 0; }
+  .doc-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .doc-meta {
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 2px;
+  }
+  .doc-delete {
+    background: transparent;
+    color: var(--danger);
+    border: 1px solid var(--border);
+    padding: 6px 10px;
+    font-size: 12px;
+    flex-shrink: 0;
+    margin-left: 12px;
+  }
+  .doc-delete:hover:not(:disabled) {
+    background: var(--danger);
+    color: #0b0d11;
+    filter: none;
+  }
 </style>
 </head>
 <body>
@@ -147,7 +182,9 @@
 
     <section class="panel">
       <h2>Documents</h2>
-      <div class="placeholder" id="documentsPlaceholder">Document list goes here (next commit).</div>
+      <div id="documentsList">
+        <div class="placeholder" id="documentsPlaceholder">No documents uploaded yet.</div>
+      </div>
     </section>
 
     <section class="panel">
@@ -162,6 +199,51 @@ const fileLabel = document.getElementById('fileLabel');
 const uploadForm = document.getElementById('uploadForm');
 const uploadBtn = document.getElementById('uploadBtn');
 const uploadStatus = document.getElementById('uploadStatus');
+const documentsList = document.getElementById('documentsList');
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+async function loadDocuments() {
+  const res = await fetch('/documents');
+  const docs = await res.json();
+
+  if (docs.length === 0) {
+    documentsList.innerHTML = '<div class="placeholder">No documents uploaded yet.</div>';
+    return;
+  }
+
+  documentsList.innerHTML = docs.map(doc => `
+    <div class="doc-row" data-doc-id="${escapeHtml(doc.doc_id)}">
+      <div class="doc-info">
+        <div class="doc-name">${escapeHtml(doc.doc_name)}</div>
+        <div class="doc-meta">${doc.num_chunks} chunk${doc.num_chunks === 1 ? '' : 's'}</div>
+      </div>
+      <button class="doc-delete" data-doc-id="${escapeHtml(doc.doc_id)}">Delete</button>
+    </div>
+  `).join('');
+
+  documentsList.querySelectorAll('.doc-delete').forEach(btn => {
+    btn.addEventListener('click', () => deleteDocument(btn.dataset.docId, btn));
+  });
+}
+
+async function deleteDocument(docId, btnEl) {
+  btnEl.disabled = true;
+  btnEl.textContent = '...';
+  try {
+    const res = await fetch(`/documents/${docId}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error('Delete failed');
+    await loadDocuments();
+  } catch (err) {
+    btnEl.disabled = false;
+    btnEl.textContent = 'Delete';
+    alert(`Failed to delete: ${err.message}`);
+  }
+}
 
 fileInput.addEventListener('change', () => {
   const file = fileInput.files[0];
@@ -202,6 +284,8 @@ uploadForm.addEventListener('submit', async (e) => {
     fileInput.value = '';
     fileLabel.textContent = 'Choose a .pdf, .docx, .txt, or .md file...';
     fileLabel.classList.remove('has-file');
+
+    await loadDocuments();
   } catch (err) {
     uploadStatus.className = 'status-line visible error';
     uploadStatus.textContent = err.message;
@@ -209,6 +293,8 @@ uploadForm.addEventListener('submit', async (e) => {
     uploadBtn.disabled = true;
   }
 });
+
+loadDocuments();
 </script>
 </body>
 </html>
