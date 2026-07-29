@@ -201,6 +201,22 @@
     border-color: var(--accent);
   }
   #chatInput:disabled { color: var(--muted); }
+
+  .msg-sources {
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .source-chip {
+    font-size: 11px;
+    color: var(--muted);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 8px;
+    cursor: default;
+  }
 </style>
 </head>
 <body>
@@ -361,9 +377,19 @@ function renderChat() {
     <div class="msg ${m.role}">
       <div class="msg-role">${m.role === 'user' ? 'You' : 'Assistant'}</div>
       <div class="msg-content ${m.pending ? 'msg-pending' : ''}">${escapeHtml(m.content)}</div>
+      ${renderSources(m.sources)}
     </div>
   `).join('');
   chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function renderSources(sources) {
+  if (!sources || sources.length === 0) return '';
+  const chips = sources.map(s => {
+    const location = s.page_number ? `, p.${s.page_number}` : '';
+    return `<span class="source-chip" title="${escapeHtml(s.excerpt)}">${escapeHtml(s.doc_name)}${location}</span>`;
+  }).join('');
+  return `<div class="msg-sources">${chips}</div>`;
 }
 
 chatForm.addEventListener('submit', async (e) => {
@@ -389,7 +415,7 @@ chatForm.addEventListener('submit', async (e) => {
     if (!res.ok) throw new Error(data.detail || 'Chat request failed');
 
     sessionId = data.session_id;
-    chatHistory[chatHistory.length - 1] = { role: 'assistant', content: data.answer };
+    chatHistory[chatHistory.length - 1] = { role: 'assistant', content: data.answer, sources: data.sources };
   } catch (err) {
     chatHistory[chatHistory.length - 1] = { role: 'assistant', content: `Error: ${err.message}` };
   } finally {
