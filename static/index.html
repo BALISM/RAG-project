@@ -405,13 +405,17 @@ function renderChat() {
     chatMessages.innerHTML = '<div class="placeholder">Ask something about your uploaded documents.</div>';
     return;
   }
-  chatMessages.innerHTML = chatHistory.map(m => `
+  chatMessages.innerHTML = chatHistory.map(m => {
+    const showThinking = m.pending && !m.content;
+    const displayText = showThinking ? 'Thinking...' : m.content;
+    return `
     <div class="msg ${m.role}">
       <div class="msg-role">${m.role === 'user' ? 'You' : 'Assistant'}</div>
-      <div class="msg-content ${m.pending ? 'msg-pending' : ''}">${escapeHtml(m.content)}</div>
+      <div class="msg-content ${showThinking ? 'msg-pending' : ''}">${escapeHtml(displayText)}</div>
       ${renderSources(m.sources)}
     </div>
-  `).join('');
+  `;
+  }).join('');
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
@@ -434,11 +438,12 @@ chatForm.addEventListener('submit', async (e) => {
   chatSendBtn.disabled = true;
 
   chatHistory.push({ role: 'user', content: question });
-  chatHistory.push({ role: 'assistant', content: 'Thinking...', pending: true });
+  const assistantMsg = { role: 'assistant', content: '', pending: true, sources: null };
+  chatHistory.push(assistantMsg);
   renderChat();
 
   try {
-    const res = await fetch('/chat', {
+    const res = await fetch('/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -447,18 +452,56 @@ chatForm.addEventListener('submit', async (e) => {
         doc_ids: getSelectedDocIds().length > 0 ? getSelectedDocIds() : null,
       }),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || 'Chat request failed');
 
-    sessionId = data.session_id;
-    chatHistory[chatHistory.length - 1] = { role: 'assistant', content: data.answer, sources: data.sources };
+    if (!res.ok || !res.body) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || 'Chat request failed');
+    }
+
+    // NDJSON streaming: one JSON object per line, but network chunks don't
+    // respect line boundaries - a single fetch chunk can contain half a
+    // line, or several lines at once. Buffer everything and only parse
+    // complete lines (up to the last '\n'), keeping any trailing partial
+    // line around to be completed by the next chunk.
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let newlineIndex;
+      while ((newlineIndex = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, newlineIndex).trim();
+        buffer = buffer.slice(newlineIndex + 1);
+        if (!line) continue;
+
+        const event = JSON.parse(line);
+        sessionId = event.session_id;
+
+        if (event.type === 'sources') {
+          assistantMsg.sources = event.sources;
+        } else if (event.type === 'token') {
+          assistantMsg.content += event.text;
+          assistantMsg.pending = false;
+          renderChat();
+        } else if (event.type === 'error') {
+          throw new Error(event.text);
+        }
+        // 'done' event needs no handling - content was already built up
+        // token by token, so the full text is already sitting there.
+      }
+    }
   } catch (err) {
-    chatHistory[chatHistory.length - 1] = { role: 'assistant', content: `Error: ${err.message}` };
+    assistantMsg.content = `Error: ${err.message}`;
+    assistantMsg.pending = false;
+    renderChat();
   } finally {
     chatInput.disabled = false;
     chatSendBtn.disabled = false;
     chatInput.focus();
-    renderChat();
   }
 });
 </script>
