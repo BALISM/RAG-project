@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     top_k_results: int = 4
     max_file_size_mb: int = 20
     max_documents: int = 50
+    rate_limit_chat: str = "20/minute"
+    rate_limit_upload: str = "10/minute"
 
     upload_dir: str = "uploads"
     chroma_dir: str = "chroma_db"
