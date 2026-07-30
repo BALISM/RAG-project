@@ -1,6 +1,7 @@
 .env
+venv/
 __pycache__/
 *.pyc
-venv/
+.pytest_cache/
 chroma_db/
 uploads/
