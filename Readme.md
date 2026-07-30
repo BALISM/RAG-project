@@ -9,3 +9,9 @@ GET /documents/{doc_id} Full detail for one document, including its chunks
 DELETE /documents/{doc_id} Remove a document (vectors AND the file on disk)
 POST /chat Ask a question, get a grounded answer back
 POST /chat/stream Same, but streamed token-by-token
+A browser UI is served at `/` — upload files, check specific ones to scope
+a question, and chat with streaming responses and source citations.
+
+---
+
+## Project structure
