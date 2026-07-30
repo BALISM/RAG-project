@@ -15,3 +15,9 @@ a question, and chat with streaming responses and source citations.
 ---
 
 ## Project structure
+A browser UI is served at `/` — upload files, check specific ones to scope
+a question, and chat with streaming responses and source citations.
+
+---
+
+## Project structure
