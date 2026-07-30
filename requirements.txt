@@ -18,3 +18,4 @@ posthog==3.7.0  # pin: newer posthog breaks chromadb 0.5.x telemetry calls
 
 # --- LLM (Phase 4) ---
 google-genai==2.14.0
+slowapi==0.1.10
