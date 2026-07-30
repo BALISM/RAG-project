@@ -27,6 +27,7 @@ class Settings(BaseSettings):
 
     upload_dir: str = "uploads"
     chroma_dir: str = "chroma_db"
+    sessions_db: str = "chat_sessions.db"
 
     @property
     def upload_path(self) -> Path:
@@ -38,6 +39,12 @@ class Settings(BaseSettings):
     def chroma_path(self) -> Path:
         p = BASE_DIR / self.chroma_dir
         p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    @property
+    def sessions_db_path(self) -> Path:
+        p = BASE_DIR / self.sessions_db
+        p.parent.mkdir(parents=True, exist_ok=True)
         return p
 
 
