@@ -1,0 +1,38 @@
+[project]
+name = "rag-chatbot"
+version = "1.0.0"
+description = "Production-grade RAG (Retrieval-Augmented Generation) chatbot with document upload, vector search, and grounded AI responses."
+readme = "Readme.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "Muhammad Balaj" }]
+keywords = ["rag", "chatbot", "gemini", "vector-search", "ai", "llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: FastAPI",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+pythonpath = ["."]
+addopts = "-v --tb=short"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true

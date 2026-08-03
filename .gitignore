@@ -1,8 +1,46 @@
+# ── Environment & Secrets ────────────────────────────────────────────────────
 .env
-venv/
+.env.local
+.env.*.local
+*.env.zip
+
+# ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+
+# ── Virtual Environments ─────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── Testing ──────────────────────────────────────────────────────────────────
 .pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# ── Data (regenerated at runtime) ────────────────────────────────────────────
 chroma_db/
 uploads/
-chat_sessions.db
+*.db
+*.sqlite
+*.sqlite3
+
+# ── IDE ──────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini

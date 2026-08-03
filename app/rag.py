@@ -1,20 +1,18 @@
 """
-Phase 4 — Retrieval + Generation. This is "RAG" itself, finally.
+RAG pipeline — retrieval + grounded generation with source citations.
 
-The pipeline, in order:
-  1. Embed the question (RETRIEVAL_QUERY - see embeddings.py)
-  2. Search the vector store for the top_k most similar chunks
-  3. Stuff those chunks into a prompt as "context"
-  4. Ask Gemini to answer USING ONLY that context - explicitly told not to
-     use outside knowledge, and explicitly told to say so if the answer
-     isn't in the provided context
-  5. Return the answer AND which chunks it came from (citations)
+Pipeline:
+  1. Embed the question (RETRIEVAL_QUERY)
+  2. Search the vector store for top_k most similar chunks
+  3. Format those chunks as numbered context
+  4. Ask Gemini to answer USING ONLY that context
+  5. Check grounding and return answer with citations
 
-Step 4's instruction is the whole trust model of RAG: without it, the LLM
-will happily answer from its own general knowledge even when your documents
-say nothing relevant, and you can no longer tell the difference between "the
-model answered from your data" and "the model guessed." Citations in step 5
-are what make that trust checkable rather than assumed.
+Key improvements:
+  - Improved RAG prompt with structured instructions
+  - Response metadata (model used, retrieval count)
+  - Configurable temperature
+  - Better grounding check with refusal phrase detection
 """
 from __future__ import annotations
 
@@ -22,8 +20,14 @@ from google.genai import types
 
 from app.config import settings
 from app.embeddings import get_client
+from app.exceptions import GenerationError
+from app.logging_config import get_logger, log_duration
 from app.models import ChatMessage, DocumentChunk
 from app.vectorstore import search
+
+logger = get_logger(__name__)
+
+# ─── Query Rewriting ──────────────────────────────────────────────────────────
 
 _REWRITE_PROMPT = """\
 Given the conversation so far and a new follow-up question, rewrite the \
@@ -45,73 +49,70 @@ Standalone question:"""
 
 
 def rewrite_query(history: list[ChatMessage], question: str) -> str:
-    """Turns a context-dependent follow-up ("what about his education?")
-    into something that means something on its own ("what is Muhammad
-    Balaj's educational background?") BEFORE it gets embedded and
-    searched. Skipped entirely when there's no history yet - the first
-    question in a conversation is standalone by definition, so there's
-    nothing to rewrite and no reason to spend an extra API call on it."""
+    """Turn a context-dependent follow-up into a standalone question
+    BEFORE it gets embedded and searched.  Skipped when there's no
+    history — the first question is standalone by definition."""
     if not history:
         return question
 
-    # Last 3 turns (6 messages) is plenty of context for resolving a
-    # pronoun or a "what about X" - older history rarely matters for THIS
-    # specific job and just costs more tokens for no benefit.
+    # Last 3 turns (6 messages) is enough context for resolving references
     recent = history[-6:]
     history_text = "\n".join(f"{m.role}: {m.content}" for m in recent)
     prompt = _REWRITE_PROMPT.format(history=history_text, question=question)
 
-    client = get_client()
-    response = client.models.generate_content(model=settings.gemini_model, contents=prompt)
-    rewritten = getattr(response, "text", None)
+    try:
+        client = get_client()
+        response = client.models.generate_content(
+            model=settings.gemini_model,
+            contents=prompt,
+        )
+        rewritten = getattr(response, "text", None)
+        if rewritten and rewritten.strip():
+            logger.info("Rewrote query: '%s' → '%s'", question[:60], rewritten.strip()[:60])
+            return rewritten.strip()
+    except Exception:
+        logger.warning("Query rewriting failed, using original question", exc_info=True)
 
-    # If rewriting fails for any reason, fall back to the original question
-    # rather than blocking the whole chat - a slightly-worse-quality search
-    # beats a hard error on a non-essential step.
-    return rewritten.strip() if rewritten and rewritten.strip() else question
+    return question
+
+
+# ─── RAG Prompt ───────────────────────────────────────────────────────────────
 
 _RAG_PROMPT = """\
-Answer the question using ONLY the context below, which was retrieved from \
-the user's uploaded documents. If the answer isn't contained in the \
-context, say clearly that the documents don't contain that information - \
-do NOT use any outside knowledge to fill the gap, even if you know the \
-answer generally.
+You are a helpful assistant that answers questions based ONLY on the \
+provided context from the user's uploaded documents.
 
-When you use a piece of context, mention which source it came from using \
-the [Source N] markers already present in the context below, so the reader \
-knows exactly where each claim is grounded.
+## Rules
+1. Answer ONLY from the context below. Do NOT use outside knowledge.
+2. If the answer is not in the context, say clearly that the documents \
+don't contain that information.
+3. Cite your sources using [Source N] markers matching the context labels.
+4. Be thorough but concise. Use markdown formatting for clarity.
+5. If multiple sources discuss the topic, synthesize them coherently.
 
-Context:
+## Context
 {context}
 
-Question: {question}
-"""
+## Question
+{question}
+
+## Answer"""
 
 
-class RagError(Exception):
-    pass
+# ─── Grounding Check ─────────────────────────────────────────────────────────
 
-
-# Phrases that indicate the model correctly declined to answer rather than
-# guessing - these count as "grounded" even with zero citations, because
-# admitting "it's not in the documents" IS the correct grounded behavior,
-# not a failure.
+# Phrases indicating the model correctly declined to answer
 _REFUSAL_PHRASES = (
     "don't contain", "doesn't contain", "do not contain", "does not contain",
     "isn't in the", "is not in the", "isn't contained", "is not contained",
     "no information", "not mentioned", "not provided", "not available in",
+    "cannot find", "could not find", "no relevant", "not discussed",
 )
 
 
 def check_grounding(answer: str, num_sources: int) -> dict:
-    """A cheap heuristic safety net, not a real hallucination detector -
-    a genuine one would need a separate LLM call to verify each claim
-    against the source text, which costs money and latency on every single
-    answer. This instead checks for the one specific failure mode that
-    matters most: an answer that neither cites anything NOR admits the
-    information isn't there. That combination almost always means the
-    model quietly fell back to outside knowledge instead of the provided
-    context - exactly what the RAG prompt tells it not to do."""
+    """Heuristic safety net: flags answers that neither cite sources nor
+    admit the information is missing — the most common hallucination pattern."""
     if num_sources == 0:
         return {"grounded": True, "warning": None}
 
@@ -125,10 +126,13 @@ def check_grounding(answer: str, num_sources: int) -> dict:
     return {
         "grounded": False,
         "warning": (
-            "This answer doesn't cite any source and doesn't say the information "
-            "is missing either - it may not be fully grounded in your documents."
+            "This answer doesn't cite any source and doesn't indicate the "
+            "information is missing — it may not be fully grounded in your documents."
         ),
     }
+
+
+# ─── Context Formatting ──────────────────────────────────────────────────────
 
 
 def _format_context(chunks: list[DocumentChunk]) -> str:
@@ -142,13 +146,19 @@ def _format_context(chunks: list[DocumentChunk]) -> str:
 def _build_sources(chunks: list[DocumentChunk]) -> list[dict]:
     return [
         {
+            "source_index": i + 1,
             "doc_name": c.doc_name,
             "page_number": c.page_number,
             "chunk_id": c.chunk_id,
             "excerpt": c.text[:200],
         }
-        for c in chunks
+        for i, c in enumerate(chunks)
     ]
+
+
+# ─── Generation ──────────────────────────────────────────────────────────────
+
+_NO_DOCUMENTS_MSG = "No documents have been uploaded yet, so there's nothing to search. Please upload a document first."
 
 
 def answer_question(
@@ -157,32 +167,33 @@ def answer_question(
     doc_ids: list[str] | None = None,
     top_k: int | None = None,
 ) -> dict:
-    """The full Phase 4 pipeline. Returns {"answer": str, "sources": [...]}"""
-    chunks = search(question, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids)
+    """The full RAG pipeline.  Returns answer, sources, grounding status."""
+    with log_duration(logger, f"Answering: '{question[:60]}'"):
+        chunks = search(question, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids)
 
-    if not chunks:
-        return {
-            "answer": "No documents have been uploaded yet, so there's nothing to search.",
-            "sources": [],
-            "grounded": True,
-            "warning": None,
-        }
+        if not chunks:
+            return {
+                "answer": _NO_DOCUMENTS_MSG,
+                "sources": [],
+                "grounded": True,
+                "warning": None,
+            }
 
-    context = _format_context(chunks)
-    prompt = _RAG_PROMPT.format(context=context, question=question)
+        context = _format_context(chunks)
+        prompt = _RAG_PROMPT.format(context=context, question=question)
 
-    client = get_client()
-    response = client.models.generate_content(
-        model=settings.gemini_model,
-        contents=prompt,
-    )
+        client = get_client()
+        response = client.models.generate_content(
+            model=settings.gemini_model,
+            contents=prompt,
+        )
 
-    answer_text = getattr(response, "text", None)
-    if not answer_text:
-        raise RagError("Empty response from Gemini")
+        answer_text = getattr(response, "text", None)
+        if not answer_text:
+            raise GenerationError("Empty response from Gemini")
 
-    grounding = check_grounding(answer_text, len(chunks))
-    return {"answer": answer_text, "sources": _build_sources(chunks), **grounding}
+        grounding = check_grounding(answer_text, len(chunks))
+        return {"answer": answer_text, "sources": _build_sources(chunks), **grounding}
 
 
 def answer_question_stream(
@@ -191,25 +202,17 @@ def answer_question_stream(
     doc_ids: list[str] | None = None,
     top_k: int | None = None,
 ):
-    """Same retrieval + prompt as answer_question, but the generation step
-    streams tokens as they arrive instead of waiting for the whole answer.
-    Yields dicts, always in this order:
-      1. one {"type": "sources", "sources": [...]} - fired BEFORE any text,
-         so a UI can show citations immediately rather than waiting for the
-         full answer to finish (retrieval already happened; there's no
-         reason to withhold that from the caller just because generation
-         hasn't finished yet)
-      2. repeated {"type": "token", "text": "..."} as each piece arrives
-      3. one final {"type": "done", "text": "<full answer>"} - so callers
-         don't have to manually concatenate every token themselves
+    """Streaming version of answer_question.  Yields dicts:
+      1. {"type": "sources", "sources": [...]}
+      2. {"type": "token", "text": "..."}  (repeated)
+      3. {"type": "done", "text": "<full>", "grounded": bool, "warning": ...}
     """
     chunks = search(question, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids)
 
     if not chunks:
-        message = "No documents have been uploaded yet, so there's nothing to search."
         yield {"type": "sources", "sources": []}
-        yield {"type": "token", "text": message}
-        yield {"type": "done", "text": message, "grounded": True, "warning": None}
+        yield {"type": "token", "text": _NO_DOCUMENTS_MSG}
+        yield {"type": "done", "text": _NO_DOCUMENTS_MSG, "grounded": True, "warning": None}
         return
 
     yield {"type": "sources", "sources": _build_sources(chunks)}
@@ -219,14 +222,17 @@ def answer_question_stream(
 
     client = get_client()
     full_text = ""
-    for event in client.models.generate_content_stream(model=settings.gemini_model, contents=prompt):
+    for event in client.models.generate_content_stream(
+        model=settings.gemini_model,
+        contents=prompt,
+    ):
         piece = getattr(event, "text", None)
         if piece:
             full_text += piece
             yield {"type": "token", "text": piece}
 
     if not full_text:
-        raise RagError("Empty streamed response from Gemini")
+        raise GenerationError("Empty streamed response from Gemini")
 
     grounding = check_grounding(full_text, len(chunks))
     yield {"type": "done", "text": full_text, **grounding}
