@@ -1173,6 +1173,12 @@ async function sendMsg(q) {
         doc_ids: getSelectedDocIds().length ? getSelectedDocIds() : null,
       })
     });
+    
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || `Server error: ${res.status}`);
+    }
+
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -1191,6 +1197,15 @@ async function sendMsg(q) {
         if (ev.type === 'sources') assistantMsg.sources = ev.sources;
         if (ev.type === 'token') {
           assistantMsg.content += ev.text;
+          assistantMsg.pending = false;
+          renderFeed();
+        }
+        if (ev.type === 'error') {
+          assistantMsg.content += `\n\n**Error:** ${ev.text}`;
+          assistantMsg.pending = false;
+          renderFeed();
+        }
+        if (ev.type === 'done') {
           assistantMsg.pending = false;
           renderFeed();
         }
