@@ -8,13 +8,15 @@ Pipeline:
   4. Ask Gemini to answer USING ONLY that context
   5. Check grounding and return answer with citations
 
-Key improvements:
-  - Improved RAG prompt with structured instructions
-  - Response metadata (model used, retrieval count)
-  - Configurable temperature
-  - Better grounding check with refusal phrase detection
+Async architecture:
+  - All blocking Gemini API calls are wrapped in asyncio.to_thread so they
+    never block the event loop, allowing true streaming to the browser.
 """
 from __future__ import annotations
+
+import asyncio
+import queue
+import threading
 
 from google.genai import types
 
@@ -74,6 +76,11 @@ def rewrite_query(history: list[ChatMessage], question: str) -> str:
         logger.warning("Query rewriting failed, using original question", exc_info=True)
 
     return question
+
+
+async def rewrite_query_async(history: list[ChatMessage], question: str) -> str:
+    """Async wrapper around rewrite_query using a background thread."""
+    return await asyncio.to_thread(rewrite_query, history, question)
 
 
 # ─── RAG Prompt ───────────────────────────────────────────────────────────────
@@ -202,11 +209,7 @@ def answer_question_stream(
     doc_ids: list[str] | None = None,
     top_k: int | None = None,
 ):
-    """Streaming version of answer_question.  Yields dicts:
-      1. {"type": "sources", "sources": [...]}
-      2. {"type": "token", "text": "..."}  (repeated)
-      3. {"type": "done", "text": "<full>", "grounded": bool, "warning": ...}
-    """
+    """Synchronous streaming version (kept for reference / non-async contexts)."""
     yield {"type": "status", "text": "Searching knowledge base..."}
     chunks = search(question, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids)
 
@@ -233,6 +236,82 @@ def answer_question_stream(
         if piece:
             full_text += piece
             yield {"type": "token", "text": piece}
+
+    if not full_text:
+        raise GenerationError("Empty streamed response from Gemini")
+
+    grounding = check_grounding(full_text, len(chunks))
+    yield {"type": "done", "text": full_text, **grounding}
+
+
+async def answer_question_stream_async(
+    question: str,
+    doc_id: str | None = None,
+    doc_ids: list[str] | None = None,
+    top_k: int | None = None,
+):
+    """
+    Async streaming version of the RAG pipeline.
+
+    Uses a producer thread + asyncio.Queue to bridge the blocking
+    Gemini generate_content_stream iterator into the async event loop.
+    This ensures the event loop is NEVER blocked, giving true real-time
+    token streaming to the browser with zero buffering delay.
+    """
+    # Step 1: Vector search in background thread (non-blocking)
+    yield {"type": "status", "text": "Searching knowledge base..."}
+    chunks = await asyncio.to_thread(
+        lambda: search(question, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids)
+    )
+
+    if not chunks:
+        yield {"type": "sources", "sources": []}
+        yield {"type": "token", "text": _NO_DOCUMENTS_MSG}
+        yield {"type": "done", "text": _NO_DOCUMENTS_MSG, "grounded": True, "warning": None}
+        return
+
+    yield {"type": "sources", "sources": _build_sources(chunks)}
+
+    context = _format_context(chunks)
+    prompt = _RAG_PROMPT.format(context=context, question=question)
+
+    yield {"type": "status", "text": "Generating answer..."}
+
+    # Step 2: Run the blocking Gemini streaming call in a background thread,
+    # bridging tokens into an asyncio.Queue so we can await them here.
+    token_queue: asyncio.Queue = asyncio.Queue()
+    _SENTINEL = object()  # signals that the stream is finished
+
+    def _run_stream():
+        """Blocking producer: runs in a thread, puts tokens into the queue."""
+        try:
+            client = get_client()
+            for event in client.models.generate_content_stream(
+                model=settings.gemini_model,
+                contents=prompt,
+            ):
+                piece = getattr(event, "text", None)
+                if piece:
+                    # Schedule putting the token into the queue from the main loop
+                    loop.call_soon_threadsafe(token_queue.put_nowait, piece)
+        except Exception as exc:
+            loop.call_soon_threadsafe(token_queue.put_nowait, exc)
+        finally:
+            loop.call_soon_threadsafe(token_queue.put_nowait, _SENTINEL)
+
+    loop = asyncio.get_event_loop()
+    thread = threading.Thread(target=_run_stream, daemon=True)
+    thread.start()
+
+    full_text = ""
+    while True:
+        item = await token_queue.get()
+        if item is _SENTINEL:
+            break
+        if isinstance(item, Exception):
+            raise GenerationError(f"Streaming failed: {item}") from item
+        full_text += item
+        yield {"type": "token", "text": item}
 
     if not full_text:
         raise GenerationError("Empty streamed response from Gemini")

@@ -44,7 +44,7 @@ from app.models import (
     StatsResponse,
     UploadResponse,
 )
-from app.rag import GenerationError, answer_question, answer_question_stream, rewrite_query
+from app.rag import GenerationError, answer_question, answer_question_stream, answer_question_stream_async, rewrite_query, rewrite_query_async
 from app.vectorstore import (
     add_chunks,
     delete_document,
@@ -327,20 +327,24 @@ def chat(request: Request, payload: ChatRequest) -> ChatResponse:
     description="Same as /chat, but streams the answer token-by-token as newline-delimited JSON.",
 )
 @limiter.limit(settings.rate_limit_chat)
-def chat_stream(request: Request, payload: ChatRequest) -> StreamingResponse:
+async def chat_stream(request: Request, payload: ChatRequest) -> StreamingResponse:
+    """Fully async streaming endpoint. The event loop is never blocked."""
     session = get_or_create_session(payload.session_id)
 
-    def event_stream():
+    async def event_stream():
         full_answer = ""
         sources: list[dict] = []
         try:
-            yield json.dumps({"type": "status", "text": "Analyzing conversation history..."}) + "\n"
+            yield json.dumps({"type": "status", "text": "Analyzing question...", "session_id": session.session_id}) + "\n"
+
+            # Rewrite query in background thread — non-blocking
             try:
-                standalone_question = rewrite_query(session.messages, payload.question)
+                standalone_question = await rewrite_query_async(session.messages, payload.question)
             except Exception:
                 standalone_question = payload.question
 
-            for event in answer_question_stream(
+            # Stream tokens from async generator
+            async for event in answer_question_stream_async(
                 standalone_question,
                 doc_id=payload.doc_id,
                 doc_ids=payload.doc_ids,
@@ -350,6 +354,7 @@ def chat_stream(request: Request, payload: ChatRequest) -> StreamingResponse:
                 elif event["type"] == "done":
                     full_answer = event["text"]
                 yield json.dumps({**event, "session_id": session.session_id}) + "\n"
+
         except Exception as e:
             logger.exception("Streaming chat failed")
             yield json.dumps({
@@ -359,7 +364,7 @@ def chat_stream(request: Request, payload: ChatRequest) -> StreamingResponse:
             }) + "\n"
             return
 
-        # Save after stream completes successfully
+        # Save conversation history after stream completes
         append_message(session.session_id, ChatMessage(role="user", content=payload.question))
         append_message(
             session.session_id,
