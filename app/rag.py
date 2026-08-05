@@ -207,6 +207,7 @@ def answer_question_stream(
       2. {"type": "token", "text": "..."}  (repeated)
       3. {"type": "done", "text": "<full>", "grounded": bool, "warning": ...}
     """
+    yield {"type": "status", "text": "Searching knowledge base..."}
     chunks = search(question, top_k=top_k, doc_id=doc_id, doc_ids=doc_ids)
 
     if not chunks:
@@ -219,6 +220,8 @@ def answer_question_stream(
 
     context = _format_context(chunks)
     prompt = _RAG_PROMPT.format(context=context, question=question)
+
+    yield {"type": "status", "text": "Generating answer..."}
 
     client = get_client()
     full_text = ""

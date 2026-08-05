@@ -330,15 +330,16 @@ def chat(request: Request, payload: ChatRequest) -> ChatResponse:
 def chat_stream(request: Request, payload: ChatRequest) -> StreamingResponse:
     session = get_or_create_session(payload.session_id)
 
-    try:
-        standalone_question = rewrite_query(session.messages, payload.question)
-    except Exception:
-        standalone_question = payload.question
-
     def event_stream():
         full_answer = ""
         sources: list[dict] = []
         try:
+            yield json.dumps({"type": "status", "text": "Analyzing conversation history..."}) + "\n"
+            try:
+                standalone_question = rewrite_query(session.messages, payload.question)
+            except Exception:
+                standalone_question = payload.question
+
             for event in answer_question_stream(
                 standalone_question,
                 doc_id=payload.doc_id,
