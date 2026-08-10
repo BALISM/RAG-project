@@ -5,8 +5,9 @@ Each session stores its full message history as a JSON blob.  Sessions now
 include metadata (title, timestamps, message count) to support the
 multi-session sidebar UI.
 
-The public API has the same core signatures as the original in-memory
-version, so the upgrade was transparent to main.py and rag.py.
+Enhanced with:
+  - Session renaming (PATCH endpoint support)
+  - Session export in Markdown or JSON format
 """
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ from datetime import datetime
 
 from app.config import settings
 from app.logging_config import get_logger
-from app.models import ChatMessage, ChatSession, SessionSummary
+from app.models import ChatMessage, ChatSession, ExportFormat, SessionSummary
 
 logger = get_logger(__name__)
 
@@ -177,3 +178,65 @@ def get_session_count() -> int:
     conn = _get_connection()
     row = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()
     return row[0] if row else 0
+
+
+# ─── New: Session Rename ─────────────────────────────────────────────────────
+
+
+def rename_session(session_id: str, new_title: str) -> bool:
+    """Rename a session's title. Returns True if found and renamed."""
+    session = get_session(session_id)
+    if session is None:
+        return False
+
+    session.title = new_title.strip()[:120] or "New Chat"
+    session.last_active = datetime.now().isoformat()
+    _save(session)
+    logger.info("Renamed session %s → '%s'", session_id, session.title)
+    return True
+
+
+# ─── New: Session Export ─────────────────────────────────────────────────────
+
+
+def export_session(session_id: str, fmt: ExportFormat = ExportFormat.MARKDOWN) -> str | None:
+    """Export a session in the requested format. Returns the formatted string,
+    or None if the session doesn't exist."""
+    session = get_session(session_id)
+    if session is None:
+        return None
+
+    if fmt == ExportFormat.JSON:
+        return session.model_dump_json(indent=2)
+
+    # Markdown export
+    lines = [
+        f"# {session.title}",
+        f"",
+        f"*Session ID:* `{session.session_id}`  ",
+        f"*Created:* {session.created_at}  ",
+        f"*Last Active:* {session.last_active}  ",
+        f"*Messages:* {len(session.messages)}",
+        "",
+        "---",
+        "",
+    ]
+
+    for msg in session.messages:
+        role_label = "🧑 **You**" if msg.role == "user" else "🤖 **AetherMind**"
+        lines.append(f"### {role_label}")
+        lines.append("")
+        lines.append(msg.content)
+        lines.append("")
+
+        if msg.sources:
+            lines.append("**Sources:**")
+            for src in msg.sources:
+                page_info = f", page {src.get('page_number')}" if src.get("page_number") else ""
+                lines.append(f"- [{src.get('doc_name', 'Unknown')}{page_info}] — _{src.get('excerpt', '')[:100]}..._")
+            lines.append("")
+
+        lines.append("---")
+        lines.append("")
+
+    return "\n".join(lines)
