@@ -113,5 +113,49 @@ def test_list_and_delete_sessions():
     assert del_resp.json()["deleted"] == sess.session_id
 
 
+def test_rename_and_export_session():
+    sess = memory.create_session()
+
+    # Rename session
+    rename_resp = client.patch(
+        f"/api/v1/sessions/{sess.session_id}/rename",
+        json={"title": "Renamed Session Title"},
+    )
+    assert rename_resp.status_code == 200
+    assert rename_resp.json()["title"] == "Renamed Session Title"
+
+    # Export session
+    export_resp = client.get(f"/api/v1/sessions/{sess.session_id}/export?format=markdown")
+    assert export_resp.status_code == 200
+    assert "Renamed Session Title" in export_resp.text
+
+
+# ─── Search & Preview Endpoints ──────────────────────────────────────────────
+
+def test_semantic_search_endpoint():
+    resp = client.post(
+        "/api/v1/search",
+        json={"query": "test query", "top_k": 5},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["query"] == "test query"
+    assert "results" in data
+    assert "search_time_ms" in data
+
+
+def test_suggestions_endpoint():
+    resp = client.get("/api/v1/suggestions")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data, list)
+    assert len(data) > 0
+
+
+def test_preview_document_not_found():
+    resp = client.get("/api/v1/documents/nonexistent/preview")
+    assert resp.status_code == 404
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
