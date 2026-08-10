@@ -116,14 +116,6 @@ def search(
 
     for i, (chunk_id, text, meta) in enumerate(zip(ids, documents, metadatas)):
         page_number = meta["page_number"]
-        # Chroma returns L2 distances by default; convert to a 0-1 similarity
-        distance = distances[i] if i < len(distances) else 0.0
-        similarity = 1.0 / (1.0 + distance)
-
-        # Apply relevance threshold filtering
-        if similarity < settings.relevance_threshold:
-            continue
-
         chunks.append(
             DocumentChunk(
                 chunk_id=chunk_id,
@@ -142,7 +134,7 @@ def search_with_scores(
     top_k: int | None = None,
     doc_id: str | None = None,
     doc_ids: list[str] | None = None,
-    apply_threshold: bool = True,
+    apply_threshold: bool = False,
 ) -> list[tuple[DocumentChunk, float]]:
     """Like search(), but also returns the relevance score for each chunk."""
     k = top_k or settings.top_k_results
