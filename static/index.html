@@ -1079,7 +1079,7 @@
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
           let idx;
-          while ((idx = buffer.indexOf('\\n')) >= 0) {
+          while ((idx = buffer.indexOf('\n')) >= 0) {
             const line = buffer.slice(0, idx).trim();
             buffer = buffer.slice(idx + 1);
             if (!line) continue;
@@ -1097,14 +1097,14 @@
                 renderFeed();
               }
               if (ev.type === 'error') {
-                assistantMsg.content += `\\n\\n**Error:** ${ev.text}`;
+                assistantMsg.content += `\n\n**Error:** ${ev.text}`;
                 assistantMsg.pending = false;
                 renderFeed();
               }
               if (ev.type === 'done') {
                 assistantMsg.pending = false;
                 if(ev.grounded === false) {
-                   assistantMsg.content += `\\n\\n<div class="grounding-warning"><i class="fa-solid fa-triangle-exclamation"></i> ${ev.warning}</div>`;
+                   assistantMsg.content += `\n\n<div class="grounding-warning"><i class="fa-solid fa-triangle-exclamation"></i> ${ev.warning}</div>`;
                 }
                 renderFeed();
               }

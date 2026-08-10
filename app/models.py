@@ -7,8 +7,25 @@ auto-generated OpenAPI docs are genuinely useful.
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
 
 from pydantic import BaseModel, Field
+
+
+# ── Enums ────────────────────────────────────────────────────────────────────
+
+
+class AnswerMode(str, Enum):
+    """Controls the style/format of generated answers."""
+    DETAILED = "detailed"
+    CONCISE = "concise"
+    BULLET_POINTS = "bullet_points"
+
+
+class ExportFormat(str, Enum):
+    """Supported export formats for chat sessions."""
+    MARKDOWN = "markdown"
+    JSON = "json"
 
 
 # ── Document & Chunk Models ──────────────────────────────────────────────────
@@ -52,6 +69,14 @@ class UploadResponse(BaseModel):
 # ── Search Models ────────────────────────────────────────────────────────────
 
 
+class SearchRequest(BaseModel):
+    """Request body for the standalone semantic search endpoint."""
+
+    query: str = Field(min_length=1, max_length=4000, description="The search query")
+    top_k: int = Field(default=10, ge=1, le=50, description="Number of results to return")
+    doc_ids: list[str] | None = Field(default=None, description="Restrict search to these documents")
+
+
 class SearchResult(BaseModel):
     """A single search hit with relevance score."""
 
@@ -61,8 +86,17 @@ class SearchResult(BaseModel):
     chunk_index: int
     text: str
     page_number: int | None = None
-    relevance_score: float = Field(description="Cosine similarity score (0–1, higher = more relevant)")
+    relevance_score: float = Field(description="Similarity score (0–1, higher = more relevant)")
     excerpt: str = Field(description="First 200 characters of the chunk text")
+
+
+class SearchResponse(BaseModel):
+    """Response body for the standalone search endpoint."""
+
+    query: str
+    results: list[SearchResult]
+    total_results: int
+    search_time_ms: float = Field(description="Time taken for the search in milliseconds")
 
 
 # ── Chat Models ──────────────────────────────────────────────────────────────
@@ -103,6 +137,8 @@ class ChatRequest(BaseModel):
     session_id: str | None = Field(default=None, description="Omit on first message; reuse afterward")
     doc_id: str | None = Field(default=None, description="Restrict search to one document")
     doc_ids: list[str] | None = Field(default=None, description="Restrict search to these documents")
+    answer_mode: AnswerMode = Field(default=AnswerMode.DETAILED, description="Controls the style of the generated answer")
+    top_k: int | None = Field(default=None, ge=1, le=20, description="Override default top_k for this query")
 
 
 class ChatResponse(BaseModel):
@@ -113,6 +149,7 @@ class ChatResponse(BaseModel):
     sources: list[dict]
     grounded: bool
     warning: str | None = None
+    metrics: dict | None = Field(default=None, description="Performance metrics for this query")
 
 
 # ── System Models ────────────────────────────────────────────────────────────
@@ -122,15 +159,18 @@ class HealthResponse(BaseModel):
     """Response for /health."""
 
     status: str = "ok"
-    version: str = "1.0.0"
+    version: str = "2.0.0"
 
 
 class StatsResponse(BaseModel):
-    """System-wide statistics."""
+    """System-wide statistics — enhanced with richer metrics."""
 
     total_documents: int
     total_chunks: int
     total_sessions: int
+    total_words: int = Field(default=0, description="Total word count across all documents")
+    total_file_size_bytes: int = Field(default=0, description="Total storage used by uploaded files")
+    avg_chunks_per_doc: float = Field(default=0.0, description="Average number of chunks per document")
     storage_path: str
 
 
