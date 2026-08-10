@@ -6,11 +6,10 @@ stores/searches vectors that embeddings.py produced.  This separation means
 you can swap ChromaDB for Pinecone/Weaviate/pgvector without touching the
 embedding layer, or swap the embedding model without touching this file.
 
-Key improvements over the initial version:
-  - Relevance scores returned with search results
-  - Collection statistics for the /stats endpoint
-  - Batch-safe writes for large documents
-  - Document metadata (upload timestamp, file size, word count)
+Enhanced:
+  - Relevance threshold filtering in search results
+  - Document preview (first N chunks)
+  - Richer knowledge base statistics
 """
 from __future__ import annotations
 
@@ -121,6 +120,10 @@ def search(
         distance = distances[i] if i < len(distances) else 0.0
         similarity = 1.0 / (1.0 + distance)
 
+        # Apply relevance threshold filtering
+        if similarity < settings.relevance_threshold:
+            continue
+
         chunks.append(
             DocumentChunk(
                 chunk_id=chunk_id,
@@ -139,6 +142,7 @@ def search_with_scores(
     top_k: int | None = None,
     doc_id: str | None = None,
     doc_ids: list[str] | None = None,
+    apply_threshold: bool = True,
 ) -> list[tuple[DocumentChunk, float]]:
     """Like search(), but also returns the relevance score for each chunk."""
     k = top_k or settings.top_k_results
@@ -167,6 +171,10 @@ def search_with_scores(
         page_number = meta["page_number"]
         distance = distances[i] if i < len(distances) else 0.0
         similarity = 1.0 / (1.0 + distance)
+
+        # Apply relevance threshold filtering
+        if apply_threshold and similarity < settings.relevance_threshold:
+            continue
 
         chunk = DocumentChunk(
             chunk_id=chunk_id,
@@ -292,4 +300,48 @@ def get_collection_stats() -> dict:
         "total_chunks": count,
         "total_documents": len(docs),
         "storage_path": str(settings.chroma_path),
+    }
+
+
+# ─── New: Document Preview ───────────────────────────────────────────────────
+
+
+def get_document_preview(doc_id: str, max_chunks: int = 3) -> dict | None:
+    """Return the first N chunks of a document for inline preview.
+    Lighter than get_document() since it doesn't return all chunks."""
+    full = get_document(doc_id)
+    if full is None:
+        return None
+
+    preview_chunks = full["chunks"][:max_chunks]
+    return {
+        "doc_id": full["doc_id"],
+        "doc_name": full["doc_name"],
+        "num_chunks": full["num_chunks"],
+        "preview_chunks": preview_chunks,
+        "uploaded_at": full.get("uploaded_at"),
+        "file_size_bytes": full.get("file_size_bytes", 0),
+        "word_count": full.get("word_count", 0),
+    }
+
+
+# ─── New: Enhanced Knowledge Base Summary ────────────────────────────────────
+
+
+def get_knowledge_base_summary() -> dict:
+    """Enhanced statistics including word counts, file sizes, and averages."""
+    docs = list_documents()
+    total_chunks = sum(d["num_chunks"] for d in docs)
+    total_words = sum(d.get("word_count", 0) for d in docs)
+    total_file_size = sum(d.get("file_size_bytes", 0) for d in docs)
+    avg_chunks = total_chunks / len(docs) if docs else 0.0
+
+    return {
+        "total_documents": len(docs),
+        "total_chunks": total_chunks,
+        "total_words": total_words,
+        "total_file_size_bytes": total_file_size,
+        "avg_chunks_per_doc": round(avg_chunks, 1),
+        "storage_path": str(settings.chroma_path),
+        "documents": docs,
     }
