@@ -156,13 +156,16 @@ def chunk_document(
         chunk_index = 0
         for page_number, page_text in pages:
             for piece in chunk_text(page_text):
+                piece_clean = piece.strip()
+                if not piece_clean:
+                    continue
                 all_chunks.append(
                     DocumentChunk(
                         chunk_id=f"{doc_id}::chunk::{chunk_index}",
                         doc_id=doc_id,
                         doc_name=doc_name,
                         chunk_index=chunk_index,
-                        text=piece,
+                        text=piece_clean,
                         page_number=page_number,
                         content_hash=file_hash,
                         stored_filename=path.name,

@@ -4,14 +4,16 @@ Embedding layer — turns text into vectors via Google's Gemini API.
 Key design decisions:
   - RETRIEVAL_DOCUMENT vs RETRIEVAL_QUERY task types (asymmetric embedding)
   - Retry with exponential backoff for transient API failures
-  - Batch size limiting to stay within API constraints
+  - Parallel embedding execution via ThreadPoolExecutor ensuring exact 1-to-1 chunk mapping
   - Lazy client initialization
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from google import genai
 from google.genai import types
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from app.config import settings
 from app.exceptions import EmbeddingError
@@ -24,9 +26,6 @@ _client: genai.Client | None = None
 # 768 keeps vectors small (fast to store/search) while still being one of
 # Google's recommended sizes (768/1536/3072).
 EMBEDDING_DIMENSIONS = 768
-
-# Gemini embedding API accepts at most ~100 texts per batch call.
-_MAX_BATCH_SIZE = 100
 
 
 def get_client() -> genai.Client:
@@ -45,47 +44,62 @@ def get_client() -> genai.Client:
     retry=retry_if_exception_type(Exception),
     reraise=True,
 )
-def _embed_batch(texts: list[str], task_type: str) -> list[list[float]]:
-    """Call the embedding API for a single batch, with retry logic."""
+def _embed_single(text: str, task_type: str) -> list[float]:
+    """Embed a single text string with retry logic. Returns a 768-dim float list."""
     client = get_client()
     response = client.models.embed_content(
         model=settings.embedding_model,
-        contents=texts,
+        contents=text,
         config=types.EmbedContentConfig(
             task_type=task_type,
             output_dimensionality=EMBEDDING_DIMENSIONS,
         ),
     )
-    return [e.values for e in response.embeddings]
+    if not response.embeddings or not response.embeddings[0].values:
+        raise EmbeddingError("Gemini API returned an empty embedding vector")
+    return list(response.embeddings[0].values)
 
 
 def embed_documents(texts: list[str]) -> list[list[float]]:
-    """Embed a batch of document chunks for storage. Automatically splits
-    into sub-batches if the input exceeds the API's per-call limit."""
+    """Embed a list of document chunks concurrently.
+    Guarantees exactly one vector embedding per input text, maintaining order."""
     if not texts:
         return []
 
-    all_embeddings: list[list[float]] = []
     with log_duration(logger, f"Embedding {len(texts)} document chunks"):
-        for i in range(0, len(texts), _MAX_BATCH_SIZE):
-            batch = texts[i : i + _MAX_BATCH_SIZE]
-            try:
-                embeddings = _embed_batch(batch, "RETRIEVAL_DOCUMENT")
-                all_embeddings.extend(embeddings)
-            except Exception as e:
-                raise EmbeddingError(
-                    f"Failed to embed document batch ({len(batch)} texts)",
-                    detail=str(e),
-                ) from e
+        embeddings: list[list[float] | None] = [None] * len(texts)
 
-    return all_embeddings
+        # Use max 10 concurrent threads to avoid rate limits while maintaining high throughput
+        max_workers = min(10, max(1, len(texts)))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_index = {
+                executor.submit(_embed_single, text, "RETRIEVAL_DOCUMENT"): i
+                for i, text in enumerate(texts)
+            }
+            for future in as_completed(future_to_index):
+                index = future_to_index[future]
+                try:
+                    embeddings[index] = future.result()
+                except Exception as e:
+                    raise EmbeddingError(
+                        f"Failed to embed chunk index {index} (length: {len(texts[index])})",
+                        detail=str(e),
+                    ) from e
+
+        # Final safety validation
+        result = [emb for emb in embeddings if emb is not None]
+        if len(result) != len(texts):
+            raise EmbeddingError(
+                f"Embedding count mismatch: expected {len(texts)}, got {len(result)}"
+            )
+
+        return result
 
 
 def embed_query(text: str) -> list[float]:
     """Embed a single user question for search."""
     try:
-        result = _embed_batch([text], "RETRIEVAL_QUERY")
-        return result[0]
+        return _embed_single(text, "RETRIEVAL_QUERY")
     except Exception as e:
         raise EmbeddingError(
             "Failed to embed search query",
